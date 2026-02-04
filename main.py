@@ -3,6 +3,7 @@ import time
 import html
 import json
 import secrets
+import threading
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -24,11 +25,13 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 
-# ✅ NEW: Postgres connection string (Koyeb / Supabase / Neon / Cloud Run all use this pattern)
+# Postgres connection string:
+#   postgres://user:pass@host:5432/dbname?sslmode=require
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 if not SESSION_SECRET:
     SESSION_SECRET = secrets.token_urlsafe(32)
+
 
 def _is_https_base(url: str) -> bool:
     try:
@@ -36,12 +39,17 @@ def _is_https_base(url: str) -> bool:
     except Exception:
         return False
 
+
 # ============================================================
-# App + Sessions (cookie stores only session id)
+# App + Sessions
 # ============================================================
 
 app = FastAPI()
 
+# NOTE:
+# - In production (Cloud Run) you'll be https.
+# - For local http dev, you might need to set https_only=False,
+#   but we're keeping your current secure settings.
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -94,58 +102,103 @@ DEFAULT_PREFS = {
 }
 
 # ============================================================
-# DB Helpers (Postgres)
+# DB Helpers (Postgres) — LAZY INIT (no startup crash)
 # ============================================================
+
+_db_init_lock = threading.Lock()
+_db_initialized = False
+
 
 def db():
     """
     Returns a Postgres connection with dict rows.
-    Uses DATABASE_URL like:
-      postgres://user:pass@host:5432/dbname?sslmode=require
     """
     if not DATABASE_URL:
         raise RuntimeError("Missing DATABASE_URL env var (Postgres connection string).")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
-def init_db():
-    conn = db()
-    cur = conn.cursor()
 
-    # users
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            name TEXT,
-            picture TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
+def init_db_if_needed():
+    """
+    Creates tables if they don't exist.
+    Runs ONLY when the app actually needs DB access.
+    Never runs at startup (so a broken DB doesn't crash the server).
+    """
+    global _db_initialized
+    if _db_initialized:
+        return
 
-    # sessions
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL
-        )
-    """)
+    with _db_init_lock:
+        if _db_initialized:
+            return
 
-    # prefs
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS prefs (
-            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-            prefs_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
+        conn = db()
+        cur = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        # users
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT,
+                picture TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # sessions
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+        """)
+
+        # prefs
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS prefs (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                prefs_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+        _db_initialized = True
+
+
+def _db_error_page(title: str, details: str):
+    safe_details = html.escape(details)
+    return HTMLResponse(
+        f"""
+        <html>
+          <head><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
+          <body style="margin:0;padding:22px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial;background:#05070c;color:#e5e7eb;">
+            <div style="max-width:860px;margin:0 auto;">
+              <div style="font-size:20px;font-weight:900;margin-bottom:10px;">{html.escape(title)}</div>
+              <div style="opacity:0.85;margin-bottom:14px;">
+                The app is running, but the database connection failed.
+              </div>
+              <pre style="white-space:pre-wrap;background:#0b1220;border:1px solid #1f2937;border-radius:14px;padding:14px;overflow:auto;">
+{safe_details}
+              </pre>
+              <div style="opacity:0.75;margin-top:12px;font-size:13px;">
+                Common fixes: DATABASE_URL correct, password correct, and include <b>sslmode=require</b>.
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        status_code=500,
+    )
+
 
 def upsert_user(email: str, name: str | None, picture: str | None):
+    init_db_if_needed()
     now = datetime.now(timezone.utc).isoformat()
     conn = db()
     cur = conn.cursor()
@@ -168,7 +221,9 @@ def upsert_user(email: str, name: str | None, picture: str | None):
     conn.close()
     return row if row else None
 
+
 def create_session(user_id: int) -> str:
+    init_db_if_needed()
     sid = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
     conn = db()
@@ -181,7 +236,9 @@ def create_session(user_id: int) -> str:
     conn.close()
     return sid
 
+
 def get_session(sid: str):
+    init_db_if_needed()
     conn = db()
     cur = conn.cursor()
     cur.execute(
@@ -198,7 +255,9 @@ def get_session(sid: str):
     conn.close()
     return row if row else None
 
+
 def touch_session(sid: str):
+    init_db_if_needed()
     now = datetime.now(timezone.utc).isoformat()
     conn = db()
     cur = conn.cursor()
@@ -206,14 +265,18 @@ def touch_session(sid: str):
     conn.commit()
     conn.close()
 
+
 def delete_session(sid: str):
+    init_db_if_needed()
     conn = db()
     cur = conn.cursor()
     cur.execute("DELETE FROM sessions WHERE id=%s", (sid,))
     conn.commit()
     conn.close()
 
+
 def get_prefs(user_id: int):
+    init_db_if_needed()
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT prefs_json FROM prefs WHERE user_id=%s", (user_id,))
@@ -231,7 +294,9 @@ def get_prefs(user_id: int):
     except Exception:
         return DEFAULT_PREFS.copy()
 
+
 def save_prefs(user_id: int, prefs: dict):
+    init_db_if_needed()
     now = datetime.now(timezone.utc).isoformat()
     conn = db()
     cur = conn.cursor()
@@ -256,11 +321,23 @@ def current_user(request: Request):
     sid = request.session.get("sid")
     if not sid:
         return None
-    s = get_session(sid)
+    try:
+        s = get_session(sid)
+    except Exception:
+        # DB down or auth broken; clear session so app doesn't loop-crash
+        request.session.clear()
+        return None
+
     if not s:
         request.session.clear()
         return None
-    touch_session(sid)
+
+    try:
+        touch_session(sid)
+    except Exception:
+        # If touching fails, still allow user object to work
+        pass
+
     return {
         "id": s["user_id"],
         "email": s["email"],
@@ -268,6 +345,7 @@ def current_user(request: Request):
         "picture": (s.get("picture") or ""),
         "sid": s["session_id"],
     }
+
 
 def require_login(request: Request):
     if not current_user(request):
@@ -309,6 +387,7 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 6):
     _news_cache[key] = {"ts": now, "items": out}
     return out
 
+
 def build_brief_data(prefs: dict):
     date_str = datetime.now(timezone.utc).strftime("%b %d")
     sections = []
@@ -343,11 +422,14 @@ def build_brief_data(prefs: dict):
 @app.get("/health")
 @app.head("/health")
 def health():
+    # Keep health simple so it never fails due to DB.
     return {"status": "ok"}
+
 
 @app.get("/favicon.ico")
 def favicon():
     return HTMLResponse("", status_code=204)
+
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -370,9 +452,11 @@ def home(request: Request):
     </html>
     """)
 
+
 @app.get("/auth/google")
 async def auth_google(request: Request):
     return await login(request)
+
 
 @app.get("/login")
 async def login(request: Request):
@@ -396,12 +480,22 @@ async def login(request: Request):
             status_code=500
         )
 
+    # Quick DB check (but DO NOT crash server if it fails)
+    try:
+        init_db_if_needed()
+    except Exception as e:
+        return _db_error_page("Database connection failed", str(e))
+
     redirect_uri = f"{PUBLIC_BASE_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
+
 @app.get("/auth/google/callback")
 async def auth_callback(request: Request):
-    token = await oauth.google.authorize_access_token(request)
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        return HTMLResponse(f"Login failed during OAuth token step: {html.escape(str(e))}", status_code=400)
 
     userinfo = token.get("userinfo")
     if not userinfo:
@@ -420,14 +514,21 @@ async def auth_callback(request: Request):
     if not email:
         return HTMLResponse("Login failed: Google did not return email.", status_code=400)
 
-    user = upsert_user(email=email, name=name, picture=picture)
-    sid = create_session(user_id=user["id"])
-    request.session["sid"] = sid
+    try:
+        user = upsert_user(email=email, name=name, picture=picture)
+        if not user:
+            return HTMLResponse("Login failed: could not save user.", status_code=500)
 
-    prefs = get_prefs(user["id"])
-    save_prefs(user["id"], prefs)
+        sid = create_session(user_id=user["id"])
+        request.session["sid"] = sid
+
+        prefs = get_prefs(user["id"])
+        save_prefs(user["id"], prefs)
+    except Exception as e:
+        return _db_error_page("Database error during login", str(e))
 
     return RedirectResponse("/dashboard", status_code=302)
+
 
 @app.get("/logout")
 def logout(request: Request):
@@ -440,6 +541,7 @@ def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/", status_code=302)
 
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
     go = require_login(request)
@@ -447,7 +549,13 @@ def dashboard(request: Request):
         return go
 
     user = current_user(request)
-    prefs = get_prefs(user["id"])
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    try:
+        prefs = get_prefs(user["id"])
+    except Exception as e:
+        return _db_error_page("Database error loading dashboard", str(e))
 
     def ck(v): return "checked" if v else ""
 
@@ -544,6 +652,7 @@ def dashboard(request: Request):
     </html>
     """)
 
+
 @app.post("/prefs")
 def prefs_save(
     request: Request,
@@ -556,13 +665,22 @@ def prefs_save(
         return go
 
     user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
     prefs = {
         "show_world": bool(show_world),
         "show_us": bool(show_us),
         "show_markets": bool(show_markets),
     }
-    save_prefs(user["id"], prefs)
+
+    try:
+        save_prefs(user["id"], prefs)
+    except Exception as e:
+        return _db_error_page("Database error saving preferences", str(e))
+
     return RedirectResponse("/dashboard", status_code=302)
+
 
 @app.get("/brief.data.json")
 def brief_data_json(request: Request):
@@ -571,9 +689,12 @@ def brief_data_json(request: Request):
         return JSONResponse({"error": "not_logged_in"}, status_code=401)
 
     user = current_user(request)
-    prefs = get_prefs(user["id"])
-    return build_brief_data(prefs)
+    if not user:
+        return JSONResponse({"error": "not_logged_in"}, status_code=401)
 
-@app.on_event("startup")
-def _startup():
-    init_db()
+    try:
+        prefs = get_prefs(user["id"])
+    except Exception as e:
+        return JSONResponse({"error": "db_error", "details": str(e)}, status_code=500)
+
+    return build_brief_data(prefs)
