@@ -377,7 +377,7 @@ def _clean_title(title: str) -> str:
     return t
 
 
-def fetch_rss_cached(key: str, urls: list[str], max_items: int = 8):
+def fetch_rss_cached(key: str, urls: list[str], max_items: int = 15):
     now = time.time()
     cached = _news_cache.get(key)
     if cached and (now - cached["ts"] < NEWS_CACHE_TTL):
@@ -434,21 +434,21 @@ def build_brief_data(prefs: dict):
         sections.append({
             "key": "world",
             "title": "🌍 World",
-            "items": fetch_rss_cached("world", FEEDS["World"], max_items=6)
+            "items": fetch_rss_cached("world", FEEDS["World"], max_items=15)
         })
 
     if prefs.get("show_us", True):
         sections.append({
             "key": "us",
             "title": "🏛️ US / Policy",
-            "items": fetch_rss_cached("us", FEEDS["US / Policy"], max_items=6)
+            "items": fetch_rss_cached("us", FEEDS["US / Policy"], max_items=15)
         })
 
     if prefs.get("show_markets", True):
         sections.append({
             "key": "markets",
             "title": "📈 Markets",
-            "items": fetch_rss_cached("markets", FEEDS["Markets"], max_items=6)
+            "items": fetch_rss_cached("markets", FEEDS["Markets"], max_items=15)
         })
 
     return {"date": date_str, "sections": sections}
