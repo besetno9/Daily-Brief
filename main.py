@@ -384,12 +384,12 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 15):
         return cached["items"]
 
     seen = set()
-    out = []
+    all_items = []
 
+    # Collect from ALL feeds first
     for url in urls:
         try:
             feed = feedparser.parse(url)
-
             for e in (getattr(feed, "entries", []) or []):
                 title = (getattr(e, "title", "") or "").strip()
                 link = (getattr(e, "link", "") or "").strip()
@@ -397,33 +397,29 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 15):
                 if not title:
                     continue
 
-                cleaned = _clean_title(title)
-
-                if cleaned in seen:
+                tkey = title.lower()
+                if tkey in seen:
                     continue
 
-                seen.add(cleaned)
-
-                out.append({
+                seen.add(tkey)
+                all_items.append({
                     "title": title,
                     "link": link
                 })
 
-                if len(out) >= max_items:
-                    break
-
-            if len(out) >= max_items:
-                break
-
         except Exception:
             continue
 
-    _news_cache[key] = {
-        "ts": now,
-        "items": out
-    }
+    # Shuffle so one source doesn't dominate
+    import random
+    random.shuffle(all_items)
 
+    # Limit after mixing
+    out = all_items[:max_items]
+
+    _news_cache[key] = {"ts": now, "items": out}
     return out
+
 
 
 def build_brief_data(prefs: dict):
