@@ -4,6 +4,7 @@ import html
 import json
 import secrets
 import threading
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -80,15 +81,25 @@ FEEDS = {
         "https://feeds.bbci.co.uk/news/world/rss.xml",
         "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
         "https://www.aljazeera.com/xml/rss/all.xml",
+        "https://www.reuters.com/world/rss",
+        "https://apnews.com/hub/world-news?outputType=xml",
+        "https://feeds.skynews.com/feeds/rss/world.xml",
+        "https://www.ft.com/world?format=rss",
     ],
     "US / Policy": [
         "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",
         "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+        "https://www.politico.com/rss/politics08.xml",
+        "https://www.axios.com/rss.xml",
+        "https://www.reuters.com/politics/rss",
+        "https://apnews.com/hub/politics?outputType=xml",
     ],
     "Markets": [
         "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
         "https://www.cnbc.com/id/100003114/device/rss/rss.html",
         "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://www.reuters.com/business/finance/rss",
+        "https://www.ft.com/markets?format=rss",
     ],
 }
 
@@ -356,7 +367,17 @@ def require_login(request: Request):
 # RSS Helpers
 # ============================================================
 
-def fetch_rss_cached(key: str, urls: list[str], max_items: int = 6):
+def _clean_title(title: str) -> str:
+    if not title:
+        return ""
+
+    t = title.lower()
+    t = re.sub(r"[^\w\s]", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def fetch_rss_cached(key: str, urls: list[str], max_items: int = 8):
     now = time.time()
     cached = _news_cache.get(key)
     if cached and (now - cached["ts"] < NEWS_CACHE_TTL):
@@ -364,27 +385,44 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 6):
 
     seen = set()
     out = []
+
     for url in urls:
         try:
             feed = feedparser.parse(url)
+
             for e in (getattr(feed, "entries", []) or []):
                 title = (getattr(e, "title", "") or "").strip()
                 link = (getattr(e, "link", "") or "").strip()
+
                 if not title:
                     continue
-                tkey = title.lower()
-                if tkey in seen:
+
+                cleaned = _clean_title(title)
+
+                if cleaned in seen:
                     continue
-                seen.add(tkey)
-                out.append({"title": title, "link": link})
+
+                seen.add(cleaned)
+
+                out.append({
+                    "title": title,
+                    "link": link
+                })
+
                 if len(out) >= max_items:
                     break
+
             if len(out) >= max_items:
                 break
+
         except Exception:
             continue
 
-    _news_cache[key] = {"ts": now, "items": out}
+    _news_cache[key] = {
+        "ts": now,
+        "items": out
+    }
+
     return out
 
 
