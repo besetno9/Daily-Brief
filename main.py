@@ -386,10 +386,10 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 8):
     seen = set()
     all_items = []
 
-    # Collect from ALL feeds first
     for url in urls:
         try:
             feed = feedparser.parse(url)
+
             for e in (getattr(feed, "entries", []) or []):
                 title = (getattr(e, "title", "") or "").strip()
                 link = (getattr(e, "link", "") or "").strip()
@@ -400,25 +400,37 @@ def fetch_rss_cached(key: str, urls: list[str], max_items: int = 8):
                 tkey = title.lower()
                 if tkey in seen:
                     continue
-
                 seen.add(tkey)
+
+                # Extract publish time if available
+                published_ts = None
+                if hasattr(e, "published_parsed") and e.published_parsed:
+                    published_ts = time.mktime(e.published_parsed)
+
+                # Extract source from domain
+                try:
+                    domain = urlparse(link).netloc.replace("www.", "")
+                except Exception:
+                    domain = ""
+
                 all_items.append({
                     "title": title,
-                    "link": link
+                    "link": link,
+                    "source": domain,
+                    "published": published_ts
                 })
 
         except Exception:
             continue
 
-    # Shuffle so one source doesn't dominate
-    import random
-    random.shuffle(all_items)
+    # Sort by publish date (newest first)
+    all_items.sort(key=lambda x: x["published"] or 0, reverse=True)
 
-    # Limit after mixing
     out = all_items[:max_items]
 
     _news_cache[key] = {"ts": now, "items": out}
     return out
+
 
 
 
@@ -731,7 +743,15 @@ def dashboard(request: Request):
                     out += `<h2>${'{'}sec.title{'}'}</h2>`;
                     out += `<ul>`;
                     for (const it of sec.items) {{
-                        out += `<li><a href="${'{'}it.link{'}'}" target="_blank">${'{'}it.title{'}'}</a></li>`;
+                       out += `
+<li style="margin-bottom:10px;">
+    <a href="${it.link}" target="_blank">${it.title}</a>
+    <div style="font-size:12px;opacity:0.6;">
+        ${it.source || ""}
+    </div>
+</li>
+`;
+
                     }}
                     out += `</ul>`;
                 }}
