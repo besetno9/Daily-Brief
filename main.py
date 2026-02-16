@@ -377,7 +377,7 @@ def _clean_title(title: str) -> str:
     return t
 
 
-def fetch_rss_cached(key: str, urls: list[str], max_items: int = 15):
+def fetch_rss_cached(key: str, urls: list[str], max_items: int = 8):
     now = time.time()
     cached = _news_cache.get(key)
     if cached and (now - cached["ts"] < NEWS_CACHE_TTL):
@@ -430,21 +430,21 @@ def build_brief_data(prefs: dict):
         sections.append({
             "key": "world",
             "title": "🌍 World",
-            "items": fetch_rss_cached("world", FEEDS["World"], max_items=15)
+            "items": fetch_rss_cached("world", FEEDS["World"], max_items=8)
         })
 
     if prefs.get("show_us", True):
         sections.append({
             "key": "us",
             "title": "🏛️ US / Policy",
-            "items": fetch_rss_cached("us", FEEDS["US / Policy"], max_items=15)
+            "items": fetch_rss_cached("us", FEEDS["US / Policy"], max_items=8)
         })
 
     if prefs.get("show_markets", True):
         sections.append({
             "key": "markets",
             "title": "📈 Markets",
-            "items": fetch_rss_cached("markets", FEEDS["Markets"], max_items=15)
+            "items": fetch_rss_cached("markets", FEEDS["Markets"], max_items=8)
         })
 
     return {"date": date_str, "sections": sections}
@@ -594,97 +594,157 @@ def dashboard(request: Request):
     def ck(v): return "checked" if v else ""
 
     pic = (user.get("picture") or "").strip()
-    pic_html = f"<img src='{html.escape(pic)}' style='width:44px;height:44px;border-radius:999px;object-fit:cover;'/>" if pic else ""
+    pic_html = f"<img src='{html.escape(pic)}' style='width:40px;height:40px;border-radius:999px;object-fit:cover;'/>" if pic else ""
 
     return HTMLResponse(f"""
     <html>
-      <head>
+    <head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Daily Brief Dashboard</title>
-      </head>
-      <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial;background:#05070c;color:#e5e7eb;">
-        <div style="max-width:980px;margin:0 auto;padding:18px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-              {pic_html}
-              <div>
-                <div style="font-size:18px;font-weight:900;">Daily Brief</div>
-                <div style="opacity:0.7;font-size:13px;">Signed in as {html.escape(user.get("email",""))}</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:10px;">
-              <a href="/logout" style="padding:10px 12px;border-radius:12px;background:#111827;border:1px solid #1f2937;color:#e5e7eb;text-decoration:none;">Logout</a>
-            </div>
-          </div>
+        <title>Daily Brief</title>
+        <style>
+            body {{
+                margin:0;
+                font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial;
+                background: radial-gradient(circle at 20% 20%, #0f172a, #020617);
+                color:#e2e8f0;
+            }}
+            .container {{
+                max-width:1100px;
+                margin:0 auto;
+                padding:28px;
+            }}
+            .header {{
+                display:flex;
+                justify-content:space-between;
+                align-items:center;
+                margin-bottom:30px;
+            }}
+            .brand {{
+                font-size:22px;
+                font-weight:800;
+                letter-spacing:-0.5px;
+            }}
+            .card {{
+                background:rgba(15,23,42,0.75);
+                backdrop-filter: blur(12px);
+                border:1px solid rgba(255,255,255,0.06);
+                border-radius:20px;
+                padding:22px;
+                margin-bottom:22px;
+                box-shadow:0 10px 30px rgba(0,0,0,0.3);
+            }}
+            h2 {{
+                margin:0 0 14px 0;
+                font-size:18px;
+                font-weight:700;
+                color:#f8fafc;
+            }}
+            ul {{
+                margin:0;
+                padding-left:18px;
+            }}
+            li {{
+                margin:8px 0;
+                line-height:1.4;
+            }}
+            a {{
+                color:#7dd3fc;
+                text-decoration:none;
+            }}
+            a:hover {{
+                text-decoration:underline;
+            }}
+            button {{
+                padding:10px 16px;
+                border-radius:12px;
+                border:1px solid rgba(255,255,255,0.1);
+                background:#0f172a;
+                color:#e2e8f0;
+                cursor:pointer;
+            }}
+            button:hover {{
+                background:#1e293b;
+            }}
+            .prefs-grid {{
+                display:grid;
+                grid-template-columns:repeat(3,1fr);
+                gap:12px;
+                margin-bottom:16px;
+            }}
+            .footer-note {{
+                font-size:12px;
+                opacity:0.6;
+                margin-top:12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
 
-          <div style="display:grid;grid-template-columns: 1fr;gap:12px;">
-            <div style="padding:14px;border-radius:16px;background:#0b1220;border:1px solid #1f2937;">
-              <div style="font-weight:900;margin-bottom:10px;">Sections</div>
-              <form method="post" action="/prefs" style="display:grid;grid-template-columns: repeat(2, minmax(0,1fr));gap:8px 14px;">
-                <label style="display:flex;gap:8px;align-items:center;">
-                  <input type="checkbox" name="show_world" {ck(prefs.get("show_world", True))}/> World
-                </label>
-                <label style="display:flex;gap:8px;align-items:center;">
-                  <input type="checkbox" name="show_us" {ck(prefs.get("show_us", True))}/> US / Policy
-                </label>
-                <label style="display:flex;gap:8px;align-items:center;">
-                  <input type="checkbox" name="show_markets" {ck(prefs.get("show_markets", True))}/> Markets
-                </label>
-
-                <div style="grid-column:1 / -1;display:flex;gap:10px;align-items:center;margin-top:8px;">
-                  <button type="submit" style="padding:10px 12px;border-radius:12px;background:#111827;border:1px solid #1f2937;color:#e5e7eb;cursor:pointer;">Save</button>
-                  <button type="button" onclick="loadBrief()" style="padding:10px 12px;border-radius:12px;background:#111827;border:1px solid #1f2937;color:#e5e7eb;cursor:pointer;">Refresh</button>
-                  <span id="status" style="opacity:0.7;font-size:13px;"></span>
+            <div class="header">
+                <div style="display:flex;align-items:center;gap:12px;">
+                    {pic_html}
+                    <div>
+                        <div class="brand">Daily Brief</div>
+                        <div style="font-size:13px;opacity:0.7;">
+                            {html.escape(user.get("email",""))}
+                        </div>
+                    </div>
                 </div>
-              </form>
+                <a href="/logout">
+                    <button>Logout</button>
+                </a>
             </div>
 
-            <div style="padding:14px;border-radius:16px;background:#0b1220;border:1px solid #1f2937;">
-              <div id="brief"></div>
+            <div class="card">
+                <h2>Customize Sections</h2>
+                <form method="post" action="/prefs">
+                    <div class="prefs-grid">
+                        <label>
+                            <input type="checkbox" name="show_world" {ck(prefs.get("show_world", True))}/> World
+                        </label>
+                        <label>
+                            <input type="checkbox" name="show_us" {ck(prefs.get("show_us", True))}/> US / Policy
+                        </label>
+                        <label>
+                            <input type="checkbox" name="show_markets" {ck(prefs.get("show_markets", True))}/> Markets
+                        </label>
+                    </div>
+                    <button type="submit">Save Preferences</button>
+                </form>
             </div>
-          </div>
+
+            <div class="card">
+                <h2>Today’s Brief</h2>
+                <div id="brief">Loading...</div>
+            </div>
+
         </div>
 
         <script>
-          async function loadBrief() {{
-            const status = document.getElementById("status");
-            status.textContent = "Loading...";
-            try {{
-              const r = await fetch("/brief.data.json", {{cache: "no-store"}});
-              const data = await r.json();
+            async function loadBrief() {{
+                const r = await fetch("/brief.data.json", {{cache:"no-store"}});
+                const data = await r.json();
 
-              let out = `<div style="font-size:18px;font-weight:900;margin-bottom:12px;">Daily Brief — ${'{'}data.date{'}'}</div>`;
-              for (const sec of data.sections) {{
-                out += `<div style="margin:14px 0 6px;font-weight:900;">${'{'}sec.title{'}'}</div>`;
-                if (!sec.items || sec.items.length === 0) {{
-                  out += `<div style="opacity:0.8;">• (no items)</div>`;
-                  continue;
+                let out = "";
+                for (const sec of data.sections) {{
+                    out += `<h2>${'{'}sec.title{'}'}</h2>`;
+                    out += `<ul>`;
+                    for (const it of sec.items) {{
+                        out += `<li><a href="${'{'}it.link{'}'}" target="_blank">${'{'}it.title{'}'}</a></li>`;
+                    }}
+                    out += `</ul>`;
                 }}
-                out += `<ul style="margin:0;padding-left:18px;">`;
-                for (const it of sec.items) {{
-                  const t = it.title || "";
-                  const link = it.link || "";
-                  if (link) {{
-                    out += `<li style="margin:6px 0;"><a href="${'{'}link{'}'}" target="_blank" style="color:#7dd3fc;text-decoration:none;">${'{'}t{'}'}</a></li>`;
-                  }} else {{
-                    out += `<li style="margin:6px 0;color:#e5e7eb;">${'{'}t{'}'}</li>`;
-                  }}
-                }}
-                out += `</ul>`;
-              }}
 
-              document.getElementById("brief").innerHTML = out;
-              status.textContent = "Updated";
-            }} catch (e) {{
-              status.textContent = "Error loading brief";
+                document.getElementById("brief").innerHTML = out;
             }}
-          }}
 
-          loadBrief();
+            loadBrief();
         </script>
-      </body>
+    </body>
     </html>
     """)
+
 
 
 @app.post("/prefs")
