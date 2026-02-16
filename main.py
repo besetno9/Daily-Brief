@@ -745,9 +745,9 @@ def dashboard(request: Request):
                     for (const it of sec.items) {{
                        out += `
 <li style="margin-bottom:10px;">
-    <a href="${it.link}" target="_blank">${it.title}</a>
+    <a href="${{it.link}}" target="_blank">${{it.title}}</a>
     <div style="font-size:12px;opacity:0.6;">
-        ${it.source || ""}
+        ${{it.source || ""}}
     </div>
 </li>
 `;
